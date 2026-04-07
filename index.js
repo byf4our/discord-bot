@@ -1,36 +1,38 @@
 const { Client, GatewayIntentBits, Partials, SlashCommandBuilder, REST, Routes, PermissionsBitField } = require('discord.js');
 
+// 1. Client Yapılandırması
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers // Rolleri kontrol etmek için bu gerekli!
     ],
-    partials: [Partials.Channel]
+    partials: [Partials.Channel, Partials.Message, Partials.GuildMember]
 });
 
-// AYARLAR
+// 2. Ayarlar (Bunları Railway'de 'Variables' kısmına eklemeyi unutma)
 const TOKEN = process.env.TOKEN;
-const CLIENT_ID = "1479994227583619123"; // bot id
+const CLIENT_ID = "1479994227583619123"; 
 const GUILD_ID = "1468726399287169137";
-
 const CUSTOMER_ROLE = "1475497125017026741";
 const TARGET_CHANNEL = "1468733324003377324";
 
-// kullanıcı mesaj hakkı veritabanı (basit)
+// Mesaj hakkı sınırlı kullanıcılar
 const usedUsers = new Set();
 
-// BOT READY
+// 3. Bot Hazır Olduğunda
 client.once('ready', async () => {
-    console.log(`✅ Bot aktif: ${client.user.tag}`);
+    console.log(`✅ Bot başarıyla giriş yaptı: ${client.user.tag}`);
 
+    // Komut Tanımlama
     const commands = [
         new SlashCommandBuilder()
             .setName('messagelimited')
             .setDescription('Kullanıcının mesaj hakkını sıfırlar')
             .addUserOption(option =>
                 option.setName('user')
-                    .setDescription('Kullanıcı')
+                    .setDescription('Hakkı sıfırlanacak kullanıcı')
                     .setRequired(true)
             )
     ].map(cmd => cmd.toJSON());
@@ -38,62 +40,72 @@ client.once('ready', async () => {
     const rest = new REST({ version: '10' }).setToken(TOKEN);
 
     try {
+        console.log("Slash komutları yükleniyor...");
         await rest.put(
             Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
             { body: commands }
         );
-        console.log("✅ Slash komut yüklendi");
+        console.log("✅ Slash komutları başarıyla senkronize edildi.");
     } catch (err) {
-        console.error(err);
+        console.error("Komut yükleme hatası:", err);
     }
 });
 
-// MESAJ KONTROL
+// 4. Mesaj Kontrol Mantığı
 client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
+    // Botları ve hedef kanal dışındakileri direkt ele
+    if (message.author.bot || message.channel.id !== TARGET_CHANNEL) return;
 
-    // sadece belirli kanal
-    if (message.channel.id !== TARGET_CHANNEL) return;
+    // Üye bilgisini kontrol et (cache'de yoksa çek)
+    const member = message.member || await message.guild.members.fetch(message.author.id);
 
-    // müşteri mi?
-    if (!message.member.roles.cache.has(CUSTOMER_ROLE)) return;
+    // Eğer kullanıcıda Müşteri Rolü yoksa bot karışmasın
+    if (!member.roles.cache.has(CUSTOMER_ROLE)) return;
 
-    // daha önce yazmış mı?
+    // Eğer daha önce mesaj atmışsa
     if (usedUsers.has(message.author.id)) {
         try {
-            await message.author.send("❌ Daha önce mesaj limitini kullandın!");
-        } catch {
-            console.log("DM gönderilemedi");
+            await message.delete();
+            await message.author.send("❌ Üzgünüm, bu kanalda yalnızca 1 mesaj hakkınız bulunmaktadır.").catch(() => {});
+        } catch (err) {
+            console.log("Mesaj silinemedi veya DM atılamadı:", err.message);
         }
-        await message.delete().catch(() => {});
         return;
     }
 
-    // ilk mesaj
+    // İlk mesajını attı, listeye ekle
     usedUsers.add(message.author.id);
+    console.log(`📌 ${message.author.tag} ilk mesajını gönderdi ve limiti doldu.`);
 });
 
-// SLASH KOMUT
+// 5. Slash Komut İşleyici
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     if (interaction.commandName === 'messagelimited') {
-
-        // admin kontrol
+        // Admin kontrolü
         if (!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return interaction.reply({ content: "❌ Yetkin yok!", ephemeral: true });
+            return interaction.reply({ content: "❌ Bu komutu kullanmak için 'Yönetici' yetkin olmalı!", ephemeral: true });
         }
 
-        const user = interaction.options.getUser('user');
+        const targetUser = interaction.options.getUser('user');
 
-        usedUsers.delete(user.id);
-
-        interaction.reply({
-            content: `✅ ${user.tag} kullanıcısının mesaj hakkı sıfırlandı.`,
-            ephemeral: true
-        });
+        if (usedUsers.has(targetUser.id)) {
+            usedUsers.delete(targetUser.id);
+            return interaction.reply({ content: `✅ **${targetUser.tag}** kullanıcısının mesaj hakkı sıfırlandı. Artık 1 mesaj daha atabilir.`, ephemeral: true });
+        } else {
+            return interaction.reply({ content: `ℹ️ **${targetUser.tag}** zaten mesaj hakkını kullanmamış veya limiti yok.`, ephemeral: true });
+        }
     }
 });
 
-client.login(process.env.TOKEN);
-console.log("MTQ3OTk5NDIyNzU4MzYxOTEyMw.G6CVUv.K3yHcgmUEK4KtOHa6gaQxYTSJkOFbd5G6FGOQs:", process.env.TOKEN);
+// 6. Giriş İşlemi
+if (!TOKEN) {
+    console.error("❌ HATA: TOKEN bulunamadı! Railway Variables kısmına 'TOKEN' eklediğinden emin ol.");
+    process.exit(1);
+}
+
+client.login(TOKEN).catch(err => {
+    console.error("❌ Giriş yapılamadı! Token yanlış olabilir veya Intent ayarların kapalı.");
+    console.error(err);
+});
