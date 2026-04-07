@@ -96,3 +96,4 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 client.login(process.env.TOKEN);
+console.log("MTQ3OTk5NDIyNzU4MzYxOTEyMw.G6CVUv.K3yHcgmUEK4KtOHa6gaQxYTSJkOFbd5G6FGOQs:", process.env.TOKEN);
